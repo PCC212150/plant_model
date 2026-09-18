@@ -312,7 +312,10 @@ def main():
                     good_i = [v for v in per_ch_iou if v >= 0]
                     val_iou = float(np.mean(good_i)) if good_i else -1.0
 
-            improved = val_dice - best_val_dice > 1e-4
+            # 没有验证集时 val_dice 恒为 -1，`-1 - (-1) = 0 > 1e-4` 为假 →
+            # **一次都不会保存**，而最后还打印「模型已保存」。
+            # （root_model 也有这个 bug，只在 --val-size 0 时触发。）
+            improved = (val_dice - best_val_dice > 1e-4) if val_ds else True
             if improved:
                 best_val_dice, best_epoch = val_dice, epoch
                 torch.save({"state_dict": model.state_dict(), "epoch": epoch,
