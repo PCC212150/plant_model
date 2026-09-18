@@ -1,0 +1,29 @@
+# ===== 模型权重 =====
+# 每个上百 MB，超过 GitHub 单文件 100MB 硬限制，无法入库。
+# 分发方式：网盘 / 服务器。
+*.pth
+
+# ===== 项目根目录下的产物文件夹 =====
+# **前导斜杠不能省**：gitignore 里写 `datasets/` 会匹配**任意层级**的同名目录，
+# 于是 `tool/analysis_datas/`（工具代码！）也可能被一起忽略、提交不进去 —— root_model 2026-09-16 实际踩到过。
+# 加前导斜杠即锚定到仓库根，只忽略根目录那一份。
+/datasets/
+/model/
+/result/
+/inference_pictures/
+/analysis_datas/
+
+# ===== Python =====
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+.pytest_cache/
+
+# ===== 编辑器 / 本地工具配置 =====
+.claude/
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
