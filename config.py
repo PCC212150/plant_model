@@ -16,7 +16,19 @@ PROJECT_ROOT = Path(__file__).resolve().parent
 
 # ------------------------- 目录 -------------------------
 DATASETS_DIR = PROJECT_ROOT / "datasets"
-PLANT_DATA_DIR = DATASETS_DIR / "plant"   # 株高数据集根目录
+PLANT_DATA_DIR = DATASETS_DIR / "plant"   # 株高数据集根目录（train/test 同构）
+TRAIN_DATA_DIR = PLANT_DATA_DIR / "train"
+TEST_DATA_DIR = PLANT_DATA_DIR / "test"   # **留出测试集**：与训练**植株级零重叠**
+# 划分记录（**datasets/ 不入库，所以这份记录只存在这里**）：
+#   2026-09-20 划出，共 4 植株 / 20 组
+#     train = C001-2（8 组）、C001-3（2 组）、C001-4（2 组）   共 12 组
+#     test  = C001-1（8 组，完整时点序列）                     共  8 组
+#   规则：**按植株整组进出**（`common.dataset.plant_key`），同一植株的所有时点同侧。
+#   为什么挑 C001-1 当测试：它是四个里唯一有完整 8 时点序列、且可疑样本较少的
+#     （基于标注的筛查：C001-1 有 2/8 可疑，C001-2 有 4/8）。**这个选择是任意的，
+#     只有 4 植株时怎么挑都差不多；关键是固定住** —— 以后比模型必须在同一批图上比。
+#   ⚠️ 标了新植株之后要**重划**，并把新的划分也记在这里（别悄悄换测试集，
+#      换了以后新旧模型的指标就不可比了）。
 MODEL_DIR = PROJECT_ROOT / "model"        # 模型根目录（内含 model_YYYYMMDDHHMM 子文件夹）
 RESULT_DIR = PROJECT_ROOT / "result"      # 推理结果根目录
 

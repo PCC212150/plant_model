@@ -42,7 +42,9 @@ def parse_args():
                    help="模型文件夹名（可省 model_ 前缀；逗号分隔=集成）。留空=取最新")
     p.add_argument("--size", type=int, default=None,
                    help="输入长边。默认用权重里记录的训练 size（尺度必须与训练一致）")
-    p.add_argument("--data-dir", type=Path, default=config.PLANT_DATA_DIR)
+    p.add_argument("--data-dir", type=Path, default=config.TEST_DATA_DIR,
+                   help="评测数据目录（默认 datasets/plant/test —— **留出集**，"
+                        "与训练集植株级零重叠；指到 train 就成了样本内指标）")
     p.add_argument("--out-dir", type=Path, default=config.MODEL_DIR)
     p.add_argument("--mask-width", type=float, default=config.MASK_LINE_WIDTH)
     p.add_argument("--cpu", action="store_true", help="强制使用 CPU")

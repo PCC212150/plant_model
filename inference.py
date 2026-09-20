@@ -28,11 +28,14 @@ sys.path.insert(0, str(PROJECT_ROOT))
 
 import config  # noqa: E402
 from common import ckpt, image_io, naming  # noqa: E402
-from common.dataset import plant_key  # noqa: E402
+from common.dataset import CH_ABOVE, plant_key  # noqa: E402
 from common.predict import make_overlay, predict  # noqa: E402
 
 import re  # noqa: E402
 _DATE = re.compile(r"_(\d{8})")
+
+# 跨批次的「可疑记录」累计文件（每跑一次 inference 追加几行，方便回看哪批数据有问题）
+RECORD_NAME = "可疑记录.csv"
 
 
 def parse_args():
@@ -48,6 +51,32 @@ def parse_args():
     p.add_argument("--no-overlay", action="store_true", help="不写 overlay 图（只出 CSV）")
     p.add_argument("--cpu", action="store_true", help="强制使用 CPU")
     return p.parse_args()
+
+
+def _geom(m, above_mask):
+    """两个**推理时可得**的几何诊断量（不需要任何标注）。
+
+    tilt  茎轴相对水平的夹角(°)，0~90。readme 的实测表里株高偏差随倾角单调增大。
+    splay 地上部「垂直于茎轴的跨度 ÷ 沿茎轴的跨度」。铺得直时叶片沿轴伸展，这个比值小；
+          叶折返/侧向摊开时变大。
+
+    **注意：这两个量只是诊断参考，不是判据。** 拿 20 组有标注的数据核对过：
+    用 rsml 折线算 splay，可疑组中位 0.76、正常组中位 0.47，但两组区间重叠
+    （正常 0.24~0.99，可疑 0.43~1.05），**卡不出一个能用的阈值**。
+    真正能判「歪」的是 measure_plant 的叶尖比（需要 rsml），推理时没有。
+    所以这里只记录数值 + 交给下面的时点自洽性去标记。
+    """
+    u = m.get("axis")
+    if not u or m.get("base") is None or above_mask is None or not above_mask.any():
+        return None, None
+    u = np.asarray(u, float)
+    tilt = abs(np.degrees(np.arctan2(u[1], u[0])))
+    tilt = min(tilt, 180.0 - tilt)
+    ys, xs = np.nonzero(above_mask)
+    rel = np.column_stack([xs, ys]).astype(np.float64) - np.asarray(m["base"], float)
+    pu, pv = rel @ u, rel @ np.array([-u[1], u[0]])
+    span = pu.max() - pu.min()
+    return (float(tilt), float((pv.max() - pv.min()) / span) if span > 1e-6 else None)
 
 
 def main():
@@ -89,12 +118,15 @@ def main():
             Image.fromarray(ov).save(out_dir / f"{stem}_overlay.jpg",
                                      quality=88, subsampling=0)
         dt = _DATE.search(stem)
+        tilt, splay = _geom(m, res["masks_orig"][CH_ABOVE]
+                            if res["masks_orig"][CH_ABOVE] is not None else None)
         rows.append({
             "stem": stem, "归属": plant_key(stem),
             "date": dt.group(1) if dt else "",
             "height": m["height"], "ok": m["ok"], "reasons": "；".join(m["reasons"]),
             "shoot_len": m["shoot_len"], "above_px": m["above_px"],
             "sett_px": m["sett_px"], "base_from_sett": m["base_from_sett"],
+            "tilt": tilt, "splay": splay,
         })
         print(f"  [{k}/{len(stems)}] {stem:30} 株高 {m['height']:7.0f}px"
               + ("" if m["ok"] else f"   [无效] {rows[-1]['reasons']}"))
@@ -114,9 +146,50 @@ def main():
                     cur["reasons"] = (cur["reasons"] + "；" if cur["reasons"] else "") + \
                         f"比 {prev['date']} 降了 {-ch * 100:.0f}%（{args.drop_tol * 100:g}% 容忍）"
 
-    n_bad = sum(1 for r in rows if not r["ok"] or "降了" in r["reasons"])
-    print(f"\n共 {len(rows)} 张：正常 {len(rows) - n_bad}，可疑 {n_bad}；"
+    bad = [r for r in rows if not r["ok"] or "降了" in r["reasons"]]
+    print(f"\n共 {len(rows)} 张：正常 {len(rows) - len(bad)}，可疑 {len(bad)}；"
           f"耗时 {time.time() - t0:.1f}s")
+
+    # ---- 可疑清单：单独成文件 + 跨批次累计，方便回看哪批数据有问题 ----
+    # 判据只有两条，**都是推理时可得的**：
+    #   ① measure 的通道一致性守卫没过（ok=False）——above 与 shoot 互相矛盾
+    #   ② 时点自洽：同植株相邻时点株高下降超过 --drop-tol
+    # measure_plant 还有一条「叶尖比」（最远点是不是叶尖），那个要 rsml，推理时算不了 ——
+    # 实测 7 个可疑样本里有 4 个只有它报得出来，所以这份清单只能覆盖一部分。
+    if bad:
+        print(f"\n=== 可疑清单（{len(bad)} 张，建议人工看一眼 overlay）===")
+        for r in bad:
+            extra = f"  倾角{r['tilt']:.0f}° 垂直/沿轴{r['splay']:.2f}" \
+                if r["tilt"] is not None and r["splay"] is not None else ""
+            print(f"  {r['stem']:30} 株高 {r['height']:7.0f}px{extra}")
+            print(f"      {r['reasons'] or '（无备注）'}")
+        lst = out_dir / "可疑清单.txt"
+        with open(lst, "w", encoding="utf-8") as fh:
+            fh.write(f"# 可疑清单   批次: {img_dir}\n")
+            fh.write("# 判据：① 通道一致性守卫没过  ② 同植株相邻时点株高下降超过 "
+                     f"{args.drop_tol*100:g}%\n")
+            fh.write("# 注意：measure_plant 那条「叶尖比」需要 rsml，推理时算不了，"
+                     "所以这份清单覆盖不全\n\n")
+            for r in bad:
+                fh.write(f"{r['stem']}\t株高{r['height']:.0f}px\t{r['reasons'] or ''}\n")
+        print(f"可疑清单: {lst}")
+
+        rec = config.RESULT_DIR / RECORD_NAME
+        rec.parent.mkdir(parents=True, exist_ok=True)
+        new = not rec.exists()
+        with open(rec, "a", encoding="utf-8-sig", newline="") as fh:
+            w = csv.writer(fh)
+            if new:
+                w.writerow(["批次", "时间", "图片名", "归属", "日期", "株高(px)",
+                            "茎长(px)", "茎倾角(°)", "垂直/沿轴", "原因"])
+            ts = time.strftime("%Y-%m-%d %H:%M")
+            for r in bad:
+                w.writerow([img_dir.name, ts, r["stem"], r["归属"], r["date"],
+                            f"{r['height']:.0f}", f"{r['shoot_len']:.0f}",
+                            "" if r["tilt"] is None else f"{r['tilt']:.1f}",
+                            "" if r["splay"] is None else f"{r['splay']:.2f}",
+                            r["reasons"]])
+        print(f"已追加到累计记录: {rec}")
 
     # ---- CSV ----
     out = out_dir / f"{out_dir.name}.csv"
@@ -127,15 +200,21 @@ def main():
         fh.write(f"# 「时点变化」= 同一植株与上一个拍摄日相比的株高变化。"
                  f"明显下降(>{args.drop_tol*100:g}%)说明那天摆放方式变了 —— "
                  f"叶片折返会改变最远点落在哪，模型修不了，需要复核\n")
+        fh.write("# 「茎倾角」= 茎轴相对水平的夹角；「垂直/沿轴」= 地上部垂直于茎轴的跨度÷沿茎轴\n"
+                 "#   的跨度。两列只是诊断参考、不是判据 —— 实测它们分不开正常与可疑\n"
+                 "#   （详见 inference.py 的 _geom 注释）\n")
         w = csv.writer(fh)
         w.writerow(["图片名", "株高(px)", "茎长(px)", "地上部面积(px²)", "种茎面积(px²)",
-                    "基部来自种茎", "测量有效", "时点变化", "备注"])
+                    "基部来自种茎", "测量有效", "时点变化", "茎倾角(°)", "垂直/沿轴", "备注"])
         for r in rows:
             w.writerow([r["stem"], f"{r['height']:.0f}", f"{r['shoot_len']:.0f}",
                         r["above_px"], r["sett_px"],
                         "是" if r["base_from_sett"] else "否",
                         "是" if r["ok"] else "否",
-                        r.get("变化", ""), r["reasons"]])
+                        r.get("变化", ""),
+                        "" if r["tilt"] is None else f"{r['tilt']:.1f}",
+                        "" if r["splay"] is None else f"{r['splay']:.2f}",
+                        r["reasons"]])
     print(f"CSV: {out}")
     if not args.no_overlay:
         print(f"overlay: {out_dir}\\*_overlay.jpg")

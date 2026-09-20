@@ -72,7 +72,9 @@ def parse_args():
     p.add_argument("--val-size", type=int, default=config.VAL_SIZE,
                    help="验证集植株数（同植株的全部时点整组进同一侧）")
     p.add_argument("--seed", type=int, default=config.SEED)
-    p.add_argument("--data-dir", type=Path, default=config.PLANT_DATA_DIR)
+    p.add_argument("--data-dir", type=Path, default=config.TRAIN_DATA_DIR,
+                   help="训练数据目录（默认 datasets/plant/train；测试集在 "
+                        "datasets/plant/test，训练时不会读它）")
     p.add_argument("--out-dir", type=Path, default=config.MODEL_DIR)
     p.add_argument("--mask-width", type=float, default=config.MASK_LINE_WIDTH,
                    help="rsml 折线画成掩码的线宽(原图尺度)。**train/test 必须用同一个值**"
